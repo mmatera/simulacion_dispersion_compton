@@ -1,7 +1,7 @@
 from os import mkdir
 from pathlib import Path
 import sim
-from sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico, Evento
+from compton_simulator.sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico, Evento
 
 
 from time import time
