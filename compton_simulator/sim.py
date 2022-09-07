@@ -1,4 +1,3 @@
-from timeit import timeit
 from datetime import datetime
 from time import time
 import numpy as np
@@ -40,8 +39,8 @@ def prob_detection(eficiencia, n):
     determina la probabilidad de detección en el intervalo delta_t
     para un detector de radio $R$ si su eficiencia es `eficiencia`.
     """
-    if eficiencia>10.:
-        return 1.
+    if eficiencia > 10.0:
+        return 1.0
     print_debug("Calculando la probabilidad de deteccion")
 
     def eficiencia_media(p: float):
@@ -55,7 +54,7 @@ def prob_detection(eficiencia, n):
         # calculamos la probabilidad de
         # detección media (eficiencia)  y su derivada como
         if p >= 1:
-            return 1., 0.
+            return 1.0, 0.0
         if p == 0.0:
             return 0.0, 0.0
         q = 1 - p
@@ -201,8 +200,8 @@ class Foton:
 
         if abs(z**2 - 100) > 50:
             return
-        # Elige el color como función de la energía. Los fotones de baja energía
-        # (los dispersados) viran al rojo. Los 511 son amarillos, y
+        # Elige el color como función de la energía. Los fotones de baja
+        # energía (los dispersados) viran al rojo. Los 511 son amarillos, y
         # los más energéticos se van haciendo amarillo cada vez más pálido.
         color = (1.0, min(1.0, self.energia / 511), max(0, 1 - 511 / self.energia))
         historia_x = [p[0] for p in self.historia] + [x]
@@ -222,9 +221,10 @@ class Foton:
             return
         px, py, pz = self.momento / self.energia
         assert abs(pz) < 2 and abs(px) < 2, [self.energia, self.momento]
-        # Elige el color como función de la energía. Los fotones de baja energía
-        # (los dispersados) viran al rojo. Los 511 son amarillos, y
-        # los más energéticos se van haciendo amarillo cada vez más pálido.
+        # Elige el color como función de la energía. Los fotones
+        # de baja energía (los dispersados) viran al rojo. Los 511 son
+        # amarillos, y los más energéticos se van haciendo amarillo
+        # cada vez más pálido.
         color = (1.0, min(1.0, self.energia / 511), max(0, 1 - 511 / self.energia))
 
         ax.scatter([x], [z], color=color)
@@ -469,7 +469,8 @@ class Detector:
         Finalmente, se devuelve el nivel del detector, y
         se resetea el nivel a 0.
         """
-        # Si cambiamos dt desde la última vez, recalculamos la probabilidad de
+        # Si cambiamos dt desde la última vez,
+        # recalculamos la probabilidad de
         # detección en función de la eficiencia.
         if self._dt != dt:
             p_deteccion = prob_detection(self.eficiencia, 2 * self.radio / (29.9 * dt))
@@ -514,8 +515,10 @@ class Dispersor:
         self, lambda_dispersion: float = 1.0, lambda_absorcion: float = 1000000.0
     ):
         """
-        lambda_dispersion: longitud de penetración asociada a la absorcion (1/ (rho * sigma_dis), en [cm])
-        lambda_absorcion: longitud de penetración asociada a la absorcion (1/ (rho * sigma_abs),  en [cm])
+        lambda_dispersion: longitud de penetración asociada
+                            a la absorcion (1/ (rho * sigma_dis), en [cm])
+        lambda_absorcion: longitud de penetración asociada
+                          a la absorcion (1/ (rho * sigma_abs),  en [cm])
         posicion: coordenadas del centro del cilindro
         alto: alto del cilindro
         radio: radio del cilindro
@@ -540,10 +543,14 @@ class Dispersor:
 
         """
         probabilidad_dispersion = (
-            1. - np.exp(-29.9 * dt / self.lambda_dispersion) if self.lambda_dispersion else 1.0
+            1.0 - np.exp(-29.9 * dt / self.lambda_dispersion)
+            if self.lambda_dispersion
+            else 1.0
         )
         probabilidad_absorcion = (
-            1. - np.exp(-29.9 * dt / self.lambda_absorcion) if self.lambda_absorcion else 1.0
+            1.0 - np.exp(-29.9 * dt / self.lambda_absorcion)
+            if self.lambda_absorcion
+            else 1.0
         )
         for evento in eventos:
             # Cada evento tiene tres fotones: primero el de 1200
@@ -590,10 +597,13 @@ class BlancoCilindrico(Dispersor):
         posicion: tuple = np.array([0, 0, 10]),
         alto: float = 1,
         radio: float = 0.5,
+        color="cyan",
     ):
         """
-        lambda_dispersion: longitud de penetracion asociada a la dispersion (cm)
-        lambda_absorcion: longitud de penetracion asociada a la absorcion (cm)
+        lambda_dispersion: longitud de penetracion asociada
+                            a la dispersion (cm)
+        lambda_absorcion: longitud de penetracion asociada
+                          a la absorcion (cm)
         posicion: coordenadas del centro del cilindro
         alto: alto del cilindro
         radio: radio del cilindro
@@ -602,6 +612,7 @@ class BlancoCilindrico(Dispersor):
         self.posicion = np.array(posicion)
         self.radio = radio
         self.alto = alto
+        self.color = color
 
     def __repr__(self):
         return "* Blanco Cilíndrico:\n" + "\n\t".join(
@@ -613,13 +624,19 @@ class BlancoCilindrico(Dispersor):
             ]
         )
 
-    def draw_setup_2d(self, ax, color="cyan"):
+    def draw_setup_2d(self, ax, color=None):
+        if color is None:
+            color = self.color
+
         x, y, z = self.posicion
         r = self.radio
         alto = self.alto
         ax.add_patch(plt.Rectangle((x - r, z - 0.5 * alto), 2 * r, alto, color=color))
 
-    def draw_setup_top(self, ax, color="cyan"):
+    def draw_setup_top(self, ax, color=None):
+        if color is None:
+            color = self.color
+
         x, y, z = self.posicion
         r = self.radio
         ax.add_patch(plt.Circle((x, y), r, color=color))
@@ -810,11 +827,19 @@ class Experimento:
             f"cuentas={sum(self.coincidencias)}\n"
         )
         if self.clicks_start:
-            legend += f"start: {len(self.clicks_start)} cuentas entre  {self.clicks_start[-1]} y {self.clicks_start[0]}\n"
+            legend += (
+                f"start: {len(self.clicks_start)} cuentas"
+                f" entre  {self.clicks_start[-1]} y"
+                f" {self.clicks_start[0]}\n"
+            )
         else:
             legend += "nada en starts\n"
         if self.clicks_stop:
-            legend += f"stop: {len(self.clicks_stop)} cuentas entre  {self.clicks_stop[-1]} y {self.clicks_stop[0]}\n"
+            legend += (
+                f"stop: {len(self.clicks_stop)} cuentas"
+                f" entre  {self.clicks_stop[-1]} y"
+                f" {self.clicks_stop[0]}\n"
+            )
         else:
             legend += "nada en stop"
 
@@ -836,11 +861,17 @@ class Experimento:
             f"cuentas={sum(self.coincidencias)}\n"
         )
         if self.clicks_start:
-            legend += f"start: {len(self.clicks_start)} cuentas entre  {self.clicks_start[-1]} y {self.clicks_start[0]}\n"
+            legend += (
+                f"start: {len(self.clicks_start)} cuentas"
+                f" entre  {self.clicks_start[-1]} y {self.clicks_start[0]}\n"
+            )
         else:
             legend += "nada en starts\n"
         if self.clicks_stop:
-            legend += f"stop: {len(self.clicks_stop)} cuentas entre  {self.clicks_stop[-1]} y {self.clicks_stop[0]}\n"
+            legend += (
+                f"stop: {len(self.clicks_stop)} cuentas entre"
+                f"  {self.clicks_stop[-1]} y {self.clicks_stop[0]}\n"
+            )
         else:
             legend += "nada en stop"
 
@@ -863,18 +894,17 @@ class Experimento:
         se genera una nueva entrada en la cola correspondiente (start o stop)
         y se inicializa con (menos) el retardo correspondiente.
         En cada paso, cada elemento de la cola se actualiza en un paso de valor
-        `self.step`. Eventualmente, estos valores se volverán positivos, lo que representa
-        una señal que efectivamente llegó a la placa de coincidencias.
+        `self.step`. Eventualmente, estos valores se volverán
+        positivos, lo que representa una señal que efectivamente llegó a
+        la placa de coincidencias.
 
-        Si una señal de stop está "activa", y no hay una señal de "start" previa, la señal
-        se descarta.
+        Si una señal de stop está "activa", y no hay una señal de "start"
+        previa, la señal se descarta.
         Si la señal de "start" estuvo viva por un tiempo mayor a la ventana,
         entonces se descarta.
         Si a la vez están activas una señal de start y otra de stop, y la de
-        stop es posterior al start, se calcula la diferencia de tiempo. Si es menor
-        al tamaño de la ventana, se guarda, si no, se descarta.
-
-
+        stop es posterior al start, se calcula la diferencia de tiempo.
+        Si es menor al tamaño de la ventana, se guarda, si no, se descarta.
         """
         # Avanza el estado de la señal y acumula coincidencias.
         step = self.step
@@ -898,8 +928,9 @@ class Experimento:
         while start_q and start_q[0] > self.ventana:
             old = start_q.pop(0)
             print_debug(old, "ya no es un start valido")
-            
-        # Remuevo los stops con tiempo positivo, que son más viejos que el start vigente.
+
+        # Remuevo los stops con tiempo positivo, que son más
+        # viejos que el start vigente.
         if start_q:
             while stop_q and stop_q[0] > 0 and start_q[0] < stop_q[0]:
                 old = stop_q.pop(0)
@@ -907,11 +938,11 @@ class Experimento:
                     old, "ya no es un stop valido, ya que ", start_q[0], "es más nuevo"
                 )
         else:
-        # Si no hay nada en la cola de start,
-        # remover los stops con tiempos positivos
+            # Si no hay nada en la cola de start,
+            # remover los stops con tiempos positivos
             while stop_q and stop_q[0] > 0:
                 stop_q.pop(0)
-        
+
         if stop_q and start_q and stop_q[0] > 0:
             # registramos un dt igual a la diferencia entre el stop y el start,
             # mas un ruido gaussiano con un ancho de 0.1ns (de acuerdo con
@@ -924,17 +955,16 @@ class Experimento:
             try:
                 print_debug("Se ha formado una pareja!", [dt, canal])
                 self.coincidencias[canal] += 1.0
-            except:
+            except IndexError:
                 print_debug("  demasiado tarde...")
 
             # Remuevo los starts que son más viejos que el actual
             # stop, ya que no podrían haberse detectado.
-            while start_q and start_q[0]>older_stop:
+            while start_q and start_q[0] > older_stop:
                 start_q.pop(0)
 
         assert self.clicks_start is start_q
         assert self.clicks_stop is stop_q
-
 
     def check_point(self, folder=None, show_plots=False):
         print(datetime.now().strftime("%H:%M:%S"))
@@ -959,8 +989,10 @@ class Experimento:
             print("         ", d.num_detecciones, " detecciones")
             n_det = len(d.estadistica_deteccion)
             if n_det:
-                tdet = sum(d.estadistica_deteccion)/n_det
-                disp_tdet = (sum([t**2 for t in d.estadistica_deteccion])/n_det -tdet**2)**.5
+                tdet = sum(d.estadistica_deteccion) / n_det
+                disp_tdet = (
+                    sum([t**2 for t in d.estadistica_deteccion]) / n_det - tdet**2
+                ) ** 0.5
                 print("   tiempo medio entre detecciones:", tdet, "+/-", disp_tdet)
 
         fig, ax = plt.subplots()
@@ -1029,7 +1061,8 @@ class Experimento:
                 print_debug(detector_name, " hizo click!", self.time)
                 last_detec = detector.ultima_deteccion
                 if last_detec is not None:
-                    detector.estadistica_deteccion.append(self.time - last_detec)
+                    tiempo_entre_clicks = self.time - last_detec
+                    detector.estadistica_deteccion.append(tiempo_entre_clicks)
                 detector.ultima_deteccion = self.time
 
     def simular(self, duracion=None):
