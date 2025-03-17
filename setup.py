@@ -13,5 +13,5 @@ setup(name='compton_simulator',
                    'dispersión Compton en correlaciones'),
       author="Mauricio Matera",
       author_email='matera@fisica.unlp.edu.ar',
-      py_modules=['compton_simulator'],
+      packages=find_packages(),
       )
