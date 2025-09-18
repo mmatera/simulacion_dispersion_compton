@@ -712,6 +712,8 @@ class Experimento:
             f_out.write(str(self.time))
             for c in self.coincidencias:
                 f_out.write("\n" + str(c))
+        if not show_plots:
+            return
         fig, ax = plt.subplots()
         ax.set_xlim(-20, 20)
         ax.set_ylim(-20, 20)
