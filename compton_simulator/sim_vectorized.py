@@ -275,6 +275,265 @@ class Detector:
         self.posicion = np.array(posicion)
         self.radio = radio
 
+
+
+class Dispersor:
+    """
+    Representa las propiedades y el estado de un detector.
+    """
+
+    def __init__(
+        self, lambda_dispersion: float = 1.0, lambda_absorcion: float = 1000000.0
+    ):
+        """
+        lambda_dispersion: longitud de penetración asociada
+                            a la absorcion (1/ (rho * sigma_dis), en [cm])
+        lambda_absorcion: longitud de penetración asociada
+                          a la absorcion (1/ (rho * sigma_abs),  en [cm])
+        posicion: coordenadas del centro del cilindro
+        alto: alto del cilindro
+        radio: radio del cilindro
+        """
+        self.lambda_dispersion = lambda_dispersion
+        self.lambda_absorcion = lambda_absorcion
+        self.cuenta_compton = 0
+        self.cuenta_absorcion = 0
+
+    def adentro(self, posicion):
+        """
+        Determina si posicion está en el interior del dispersor(cilindrico).
+        """
+        raise NotImplementedError
+
+    def check_scattering(self, dt: float, eventos: list):
+        """
+        Simula la interacción de los fotones en el sistema
+        con el blanco, en el intervalo de tiempo dt.
+        La interacción sólo es posible si el fotón se
+        encuentra dentro del blanco.
+
+        """
+        probabilidad_dispersion = (
+            1.0 - np.exp(-29.9 * dt / self.lambda_dispersion)
+            if self.lambda_dispersion
+            else 1.0
+        )
+        probabilidad_absorcion = (
+            1.0 - np.exp(-29.9 * dt / self.lambda_absorcion)
+            if self.lambda_absorcion
+            else 1.0
+        )
+        for evento in eventos:
+            # Cada evento tiene tres fotones: primero el de 1200
+            # y luego el par de 511.
+            for foton in evento.fotones:
+                # Podríamos agregar también eficiencias
+                # en función de la energia
+                if not self.adentro(foton.posicion):
+                    continue
+
+                # Simula la absorción
+                if rng.uniform() < probabilidad_absorcion:
+                    # print_debug("                 absorcion!")
+                    foton.aniquilar()
+                    self.cuenta_absorcion += 1
+
+                elif rng.uniform() < probabilidad_dispersion:
+                    print_debug("                 dispersion!")
+
+                    if foton.singlete:
+                        print_debug("Estoy en un singlete!")
+                        # Como lo detectamos, definimos su
+                        # polarizacion, y la de su gemelo.
+                        foton.polarizacion = "V" if rng.choice(2, 1)[0] else "H"
+                        foton.singlete = False
+                        for candidato_gemelo in evento.fotones:
+                            if candidato_gemelo.singlete:
+                                candidato_gemelo.singlete = False
+                                candidato_gemelo.polarizacion = (
+                                    "H" if foton.polarizacion == "V" else "H"
+                                )
+
+                    # Cambiamos la dirección con una distribución
+                    # de acuerdo a Klein-Nishina
+                    foton.compton()
+                    self.cuenta_compton += 1
+
+
+class BlancoCilindrico(Dispersor):
+    def __init__(
+        self,
+        lambda_dispersion: float = 1.0,
+        lambda_absorcion: float = 1000000.0,
+        posicion: tuple = np.array([0, 0, 10]),
+        alto: float = 1,
+        radio: float = 0.5,
+        color="cyan",
+    ):
+        """
+        lambda_dispersion: longitud de penetracion asociada
+                            a la dispersion (cm)
+        lambda_absorcion: longitud de penetracion asociada
+                          a la absorcion (cm)
+        posicion: coordenadas del centro del cilindro
+        alto: alto del cilindro
+        radio: radio del cilindro
+        """
+        super().__init__(lambda_dispersion, lambda_absorcion)
+        self.posicion = np.array(posicion)
+        self.radio = radio
+        self.alto = alto
+        self.color = color
+
+    def __repr__(self):
+        return "* Blanco Cilíndrico:\n" + "\n\t".join(
+            [
+                f"lambda_dispersion={self.lambda_dispersion}",
+                f"lambda_absorcion={self.lambda_absorcion}",
+                f"posicion={self.posicion}",
+                f"dimensiones= {self.radio}x{self.alto}",
+            ]
+        )
+
+    def draw_setup_2d(self, ax, color=None):
+        if color is None:
+            color = self.color
+
+        x, y, z = self.posicion
+        r = self.radio
+        alto = self.alto
+        ax.add_patch(plt.Rectangle((x - r, z - 0.5 * alto), 2 * r, alto, color=color))
+
+    def draw_setup_top(self, ax, color=None):
+        if color is None:
+            color = self.color
+
+        x, y, z = self.posicion
+        r = self.radio
+        ax.add_patch(plt.Circle((x, y), r, color=color))
+
+    def adentro(self, posicion):
+        """
+        Determina si posicion está en el interior del dispersor(cilindrico).
+        """
+        pos_rel = self.posicion - posicion
+        if abs(pos_rel[2]) > 0.5 * self.alto:
+            return False
+        if pos_rel[0] ** 2 + pos_rel[1] ** 2 > self.radio**2:
+            return False
+        return True
+
+
+class ShieldCilindrico(Dispersor):
+    def __init__(
+        self,
+        lambda_dispersion: float = 1000000.0,
+        lambda_absorcion: float = 1.0,
+        posicion: tuple = np.array([0.0, 0.0, 0.0]),
+        alto: float = 2.0,
+        radio_interior: float = 1.5,
+        radio_exterior: float = 0.5,
+        eje: str = "z",
+    ):
+        """
+        Representa un cilindro hueco, de radio interior
+        ``radio_interior``, radio exterior ``radio_exterior``,
+        y altura ``alto``, con su centro localizado en
+        ``posicion`` y con su eje de simetría alineado con el
+        eje `eje`.
+
+        cross_section: probabilidad de dispersion
+        absorcion: probabilidad de absorcion
+        posicion: coordenadas del centro del cilindro
+        alto: alto del cilindro
+        radio: radio del cilindro
+        """
+        super().__init__(lambda_dispersion, lambda_absorcion)
+        self.posicion = np.array(posicion)
+        self.radio_interior = radio_interior
+        self.radio_exterior = radio_exterior
+        self.alto = alto
+        self.eje = eje
+
+    def __repr__(self):
+        return "* Shielding:\n" + "\n\t".join(
+            [
+                f"lambda_dispersion={self.lambda_dispersion}",
+                f"lambda_absorcion={self.lambda_absorcion}",
+                f"posicion={self.posicion}",
+                (
+                    "dimensiones="
+                    + f"({self.radio_exterior}-{self.radio_interior})"
+                    + f"x{self.alto}"
+                ),
+            ]
+        )
+
+    def draw_setup_2d(self, ax, color="lightgray"):
+        r_e, r_i = self.radio_exterior, self.radio_interior
+        x, y, z = self.posicion
+        alto = self.alto
+        ancho = r_e - r_i
+        if self.eje == "z":
+            ax.add_patch(
+                plt.Rectangle((x - r_e, z - 0.5 * alto), ancho, alto, color=color)
+            )
+            ax.add_patch(
+                plt.Rectangle((x + r_i, z - 0.5 * alto), ancho, alto, color=color)
+            )
+        elif self.eje == "x":
+            ax.add_patch(
+                plt.Rectangle((z - 0.5 * alto, x - r_e), alto, ancho, color=color)
+            )
+            ax.add_patch(
+                plt.Rectangle((z - 0.5 * alto, x + r_i), alto, ancho, color=color)
+            )
+        elif self.eje == "y":
+            ax.add_patch(plt.Circle((x, y), r_e, color=color))
+            ax.add_patch(plt.Circle((x, y), r_i, color="white"))
+
+    def draw_setup_top(self, ax, color="lightgray"):
+        r_e, r_i = self.radio_exterior, self.radio_interior
+        x, y, z = self.posicion
+        alto = self.alto
+        ancho = r_e - r_i
+        if self.eje == "y":
+            ax.add_patch(
+                plt.Rectangle((x - r_e, z - 0.5 * alto), ancho, alto, color=color)
+            )
+            ax.add_patch(
+                plt.Rectangle((x + r_i, z - 0.5 * alto), ancho, alto, color=color)
+            )
+        elif self.eje == "x":
+            ax.add_patch(
+                plt.Rectangle((z - 0.5 * alto, x - r_e), alto, ancho, color=color)
+            )
+            ax.add_patch(
+                plt.Rectangle((z - 0.5 * alto, x + r_i), alto, ancho, color=color)
+            )
+        elif self.eje == "z":
+            ax.add_patch(plt.Circle((x, y), r_e, color=color))
+            ax.add_patch(plt.Circle((x, y), r_i, color="white"))
+
+    def adentro(self, posicion):
+        """
+        Determina si posicion está en el interior
+        del dispersor(cilindrico).
+        """
+        pos_rel = self.posicion - posicion
+        if self.eje == "x":
+            pos_rel[0], pos_rel[2] = pos_rel[2], pos_rel[0]
+        elif self.eje == "y":
+            pos_rel[1], pos_rel[2] = pos_rel[2], pos_rel[1]
+
+        if abs(pos_rel[2]) > 0.5 * self.alto:
+            return False
+
+        r1sq, r2sq = self.radio_interior**2, self.radio_exterior**2
+        return r2sq > pos_rel[0] ** 2 + pos_rel[1] ** 2 > r1sq
+
+
+
 class Experimento:
     def __init__(self, n_events=10000, CONO_FUENTE=(-0.99999999,1), EMITIR_EN_PLANO=False, HERALDO=True,
                  detector_pos=np.array([10,0,10]), detector_r=2.0, detector_eff=0.9,
