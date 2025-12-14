@@ -1,7 +1,7 @@
 from os import mkdir
 from pathlib import Path
-import sim
-from sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico, Evento
+from compton_simulator import sim
+from compton_simulator.sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico, Evento
 
 
 from time import time
@@ -9,7 +9,7 @@ import numpy as np
 import pickle
 
 
-FLUJO = 1000
+FLUJO = 10000
 # parametros
 sim.DEBUG = False
 # Descomentar esta línea par forzar a que la fuente sólo
@@ -19,7 +19,7 @@ sim.DEBUG = False
 # sim.HERALDO = False
 # sim.EMITIR_EN_PLANO = True
 
-DURACION = 240000000
+DURACION = 5 # 240000000
 RESET = True
 
 
