@@ -9,7 +9,7 @@ import numpy as np
 import pickle
 
 
-FLUJO = 10000
+FLUJO = 1000
 # parametros
 sim.DEBUG = False
 # Descomentar esta línea par forzar a que la fuente sólo
@@ -19,7 +19,7 @@ sim.DEBUG = False
 # sim.HERALDO = False
 # sim.EMITIR_EN_PLANO = True
 
-DURACION = 5 # 240000000
+DURACION = 1000 # 240000000
 RESET = True
 
 

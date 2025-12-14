@@ -54,25 +54,41 @@ def dentro_cilindro(pos_foton, x_cil, r_cil, h_cil):
 
 
 @numba.njit
-def dentro_anillo(pos_foton, x_cil, r_int_cil:float, r_ext_cil:float, h_cil:float, eje:str)->List[int]:
+def dentro_anillo(pos_foton, x_cil, r_int_cil:float, r_ext_cil:float, h_cil:float, eje:int)->List[int]:
     """
     Dada una lista de puntos, determina los índices correspondientes
     a puntos dentro de un anillo cilíndrico centado en x_cil, de radio interior
     r_in_cil, radio exterior r_ext_cil y alto h_cil.
     """
-    rel_pos = (pos_foton - x_cil)
-    if eje=="x":
-       rel_pos = rel_pos[:, (2,1,0,)]
-    elif eje=="y":
-       rel_pos = rel_pos[:,(0,2,1,)]
-
-    inside = np.abs(rel_pos[:, 2])<.5*h_cil
-    in_radius = np.sum(rel_pos[inside,:2]**2, axis=1)<= r_ext_cil**2
-    inside[inside] = np.logical_and(inside[inside], in_radius)
-    in_radius = np.sum(rel_pos[inside,:2]**2, axis=1)>= r_int_cil**2
-    inside[inside] = np.logical_and(inside[inside], in_radius)
+    half_h_cil=.5*h_cil
+    rad_in_sq = r_int_cil**2
+    rad_ex_sq = r_ext_cil**2
+    count = 0
+    mask = np.empty(len(pos_foton), np.bool_)
     
-    return [i for i, state in enumerate(inside) if state]
+    for i, pos in enumerate(pos_foton):
+        rel_pos = pos-x_cil
+        if eje==0:
+            dz, dy, dx = rel_pos
+        elif eje==1:
+            dx, dz, dy = rel_pos
+        else:
+            dx, dy, dz = rel_pos
+
+        if abs(dz)> half_h_cil:
+            mask[i] = False
+            continue
+        rsq = dx**2+dy**2 
+        if rsq > rad_ex_sq:
+            mask[i]=False
+            continue
+        if rsq < rad_in_sq:
+            mask[i]=False
+            continue
+        mask[i]=True
+        count+=1
+
+    return [i for i, val in enumerate(mask) if val]
 
 
 
@@ -634,7 +650,7 @@ class Dispersor:
         elif isinstance(self, ShieldCilindrico):
             posiciones = np.array([foton.posicion for evento, foton in fotones_in])
             fotones_in = [fotones_in[i] for i in
-                          dentro_anillo(posiciones, self.posicion, self.radio_interior, self.radio_exterior, self.alto, self.eje)]
+                          dentro_anillo(posiciones, self.posicion, self.radio_interior, self.radio_exterior, self.alto, {"x":0,"y":1,"z":2}[self.eje])]
         else:
             fotones_in = [(evento, foton,) for evento, foton in fotones_in if self.adentro(foton)]
         
