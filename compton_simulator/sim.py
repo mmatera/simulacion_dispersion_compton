@@ -6,6 +6,7 @@ from matplotlib import pyplot as plt
 import pickle
 
 from numpy.linalg import norm
+import numba
 
 PI = 3.1415926
 
@@ -384,13 +385,13 @@ class Evento:
             )
             self.fotones.append(Foton(np.array([0, 0, 0]), p0, singlete=False))
 
-    def draw_setup_2d(self, ax, color="yellow"):
+    def draw_setup_2d(self, ax):
         for foton in self.fotones:
-            foton.draw_setup_2d(ax, color)
+            foton.draw_setup_2d(ax)
 
-    def draw_setup_top(self, ax, color="yellow"):
+    def draw_setup_top(self, ax):
         for foton in self.fotones:
-            foton.draw_setup_top(ax, color)
+            foton.draw_setup_top(ax)
 
     def evol(self, t):
         for foton in self.fotones:
@@ -511,7 +512,7 @@ class Dispersor:
     Representa las propiedades y el estado de un detector.
     """
 
-    def __init__(
+    def __init__(self,
         self, lambda_dispersion: float = 1.0, lambda_absorcion: float = 1000000.0
     ):
         """
@@ -589,528 +590,78 @@ class Dispersor:
                     self.cuenta_compton += 1
 
 
-class BlancoCilindrico(Dispersor):
-    def __init__(
-        self,
-        lambda_dispersion: float = 1.0,
-        lambda_absorcion: float = 1000000.0,
-        posicion: tuple = np.array([0, 0, 10]),
-        alto: float = 1,
-        radio: float = 0.5,
-        color="cyan",
-    ):
-        """
-        lambda_dispersion: longitud de penetracion asociada
-                            a la dispersion (cm)
-        lambda_absorcion: longitud de penetracion asociada
-                          a la absorcion (cm)
-        posicion: coordenadas del centro del cilindro
-        alto: alto del cilindro
-        radio: radio del cilindro
-        """
-        super().__init__(lambda_dispersion, lambda_absorcion)
-        self.posicion = np.array(posicion)
-        self.radio = radio
-        self.alto = alto
-        self.color = color
+# Numba-friendly helper: check if a point is inside an annulus (ring)
+# oriented along a numeric axis. This avoids dynamic numpy indexing
+# inside Numba-compiled code by using explicit component access.
+@numba.njit
+def dentro_anillo(pos, centro, r_in, r_out, axis):
+    # pos and centro expected to be 1D arrays of length 3
+    # axis is an integer: 0 -> x, 1 -> y, 2 -> z
+    if axis == 0:
+        dx = pos[1] - centro[1]
+        dy = pos[2] - centro[2]
+    elif axis == 1:
+        dx = pos[0] - centro[0]
+        dy = pos[2] - centro[2]
+    else:
+        dx = pos[0] - centro[0]
+        dy = pos[1] - centro[1]
 
-    def __repr__(self):
-        return "* Blanco Cilíndrico:\n" + "\n\t".join(
-            [
-                f"lambda_dispersion={self.lambda_dispersion}",
-                f"lambda_absorcion={self.lambda_absorcion}",
-                f"posicion={self.posicion}",
-                f"dimensiones= {self.radio}x{self.alto}",
-            ]
-        )
-
-    def draw_setup_2d(self, ax, color=None):
-        if color is None:
-            color = self.color
-
-        x, y, z = self.posicion
-        r = self.radio
-        alto = self.alto
-        ax.add_patch(plt.Rectangle((x - r, z - 0.5 * alto), 2 * r, alto, color=color))
-
-    def draw_setup_top(self, ax, color=None):
-        if color is None:
-            color = self.color
-
-        x, y, z = self.posicion
-        r = self.radio
-        ax.add_patch(plt.Circle((x, y), r, color=color))
-
-    def adentro(self, posicion):
-        """
-        Determina si posicion está en el interior del dispersor(cilindrico).
-        """
-        pos_rel = self.posicion - posicion
-        if abs(pos_rel[2]) > 0.5 * self.alto:
-            return False
-        if pos_rel[0] ** 2 + pos_rel[1] ** 2 > self.radio**2:
-            return False
-        return True
+    dist2 = dx * dx + dy * dy
+    return (dist2 >= r_in * r_in) and (dist2 <= r_out * r_out)
 
 
 class ShieldCilindrico(Dispersor):
+    """
+    Cilindro anular (caja cilíndrica) que puede orientarse en el eje x/y/z.
+    Accepts eje as an int (0/1/2) or a string ('x','y','z').
+    """
+
     def __init__(
         self,
-        lambda_dispersion: float = 1000000.0,
-        lambda_absorcion: float = 1.0,
-        posicion: tuple = np.array([0.0, 0.0, 0.0]),
-        alto: float = 2.0,
-        radio_interior: float = 1.5,
-        radio_exterior: float = 0.5,
-        eje: str = "z",
+        centro=(0.0, 0.0, 0.0),
+        radio_interno=0.0,
+        radio_externo=5.0,
+        alto=10.0,
+        eje='z',
+        lambda_dispersion: float = 1.0,
+        lambda_absorcion: float = 1000000.0,
     ):
-        """
-        Representa un cilindro hueco, de radio interior
-        ``radio_interior``, radio exterior ``radio_exterior``,
-        y altura ``alto``, con su centro localizado en
-        ``posicion`` y con su eje de simetría alineado con el
-        eje `eje`.
-
-        cross_section: probabilidad de dispersion
-        absorcion: probabilidad de absorcion
-        posicion: coordenadas del centro del cilindro
-        alto: alto del cilindro
-        radio: radio del cilindro
-        """
         super().__init__(lambda_dispersion, lambda_absorcion)
-        self.posicion = np.array(posicion)
-        self.radio_interior = radio_interior
-        self.radio_exterior = radio_exterior
-        self.alto = alto
-        self.eje = eje
+        self.centro = np.array(centro, dtype=np.float64)
+        self.radio_interno = float(radio_interno)
+        self.radio_externo = float(radio_externo)
+        self.alto = float(alto)
 
-    def __repr__(self):
-        return "* Shielding:\n" + "\n\t".join(
-            [
-                f"lambda_dispersion={self.lambda_dispersion}",
-                f"lambda_absorcion={self.lambda_absorcion}",
-                f"posicion={self.posicion}",
-                (
-                    "dimensiones="
-                    + f"({self.radio_exterior}-{self.radio_interior})"
-                    + f"x{self.alto}"
-                ),
-            ]
-        )
+        # Accept numeric or string eje; store numeric axis (0,1,2)
+        if isinstance(eje, str):
+            eje_l = eje.lower()
+            if eje_l == 'x':
+                axis = 0
+            elif eje_l == 'y':
+                axis = 1
+            elif eje_l == 'z':
+                axis = 2
+            else:
+                raise ValueError(f"eje string must be 'x','y' or 'z', got {eje}")
+        else:
+            axis = int(eje)
+            if axis not in (0, 1, 2):
+                raise ValueError(f"eje int must be 0,1 or 2, got {eje}")
 
-    def draw_setup_2d(self, ax, color="lightgray"):
-        r_e, r_i = self.radio_exterior, self.radio_interior
-        x, y, z = self.posicion
-        alto = self.alto
-        ancho = r_e - r_i
-        if self.eje == "z":
-            ax.add_patch(
-                plt.Rectangle((x - r_e, z - 0.5 * alto), ancho, alto, color=color)
-            )
-            ax.add_patch(
-                plt.Rectangle((x + r_i, z - 0.5 * alto), ancho, alto, color=color)
-            )
-        elif self.eje == "x":
-            ax.add_patch(
-                plt.Rectangle((z - 0.5 * alto, x - r_e), alto, ancho, color=color)
-            )
-            ax.add_patch(
-                plt.Rectangle((z - 0.5 * alto, x + r_i), alto, ancho, color=color)
-            )
-        elif self.eje == "y":
-            ax.add_patch(plt.Circle((x, y), r_e, color=color))
-            ax.add_patch(plt.Circle((x, y), r_i, color="white"))
-
-    def draw_setup_top(self, ax, color="lightgray"):
-        r_e, r_i = self.radio_exterior, self.radio_interior
-        x, y, z = self.posicion
-        alto = self.alto
-        ancho = r_e - r_i
-        if self.eje == "y":
-            ax.add_patch(
-                plt.Rectangle((x - r_e, z - 0.5 * alto), ancho, alto, color=color)
-            )
-            ax.add_patch(
-                plt.Rectangle((x + r_i, z - 0.5 * alto), ancho, alto, color=color)
-            )
-        elif self.eje == "x":
-            ax.add_patch(
-                plt.Rectangle((z - 0.5 * alto, x - r_e), alto, ancho, color=color)
-            )
-            ax.add_patch(
-                plt.Rectangle((z - 0.5 * alto, x + r_i), alto, ancho, color=color)
-            )
-        elif self.eje == "z":
-            ax.add_patch(plt.Circle((x, y), r_e, color=color))
-            ax.add_patch(plt.Circle((x, y), r_i, color="white"))
+        self.eje = axis
 
     def adentro(self, posicion):
         """
-        Determina si posicion está en el interior
-        del dispersor(cilindrico).
+        Determina si posicion está en el interior del cilindro anular.
+        Uses the numba-compiled dentro_anillo for the transverse check and a
+        simple axial height check for the longitudinal coordinate.
         """
-        pos_rel = self.posicion - posicion
-        if self.eje == "x":
-            pos_rel[0], pos_rel[2] = pos_rel[2], pos_rel[0]
-        elif self.eje == "y":
-            pos_rel[1], pos_rel[2] = pos_rel[2], pos_rel[1]
-
-        if abs(pos_rel[2]) > 0.5 * self.alto:
+        pos_arr = np.asarray(posicion, dtype=np.float64)
+        # axial coordinate
+        coord = pos_arr[self.eje]
+        centro_coord = self.centro[self.eje]
+        if abs(coord - centro_coord) > (self.alto / 2.0):
             return False
-
-        r1sq, r2sq = self.radio_interior**2, self.radio_exterior**2
-        return r2sq > pos_rel[0] ** 2 + pos_rel[1] ** 2 > r1sq
-
-
-class Experimento:
-    def __init__(
-        self,
-        duracion: float = 80,  # ns
-        step: float = 0.001,  # ns
-        ventana: float = 50,  # ns
-        canales: int = 2048,  # cantidad de canales
-        flujo_eventos: float = 0.1,  # eventos / ns
-        polarizacion_fuente=None,  # Asumir que los fotones salen polarizados
-        # Los detectores
-        start: Detector = Detector(
-            eficiencia=0.9,
-            posicion=np.array([10, 0, 10]),
-            radio=2,
-            retardo=0,
-        ),
-        stop: Detector = Detector(
-            eficiencia=0.6,
-            posicion=np.array([-10, 0, -10]),
-            radio=2,
-            retardo=1,
-        ),
-        # Los Blancos
-        blancos: list = [],
-        folder=None,  # Generar un nombre si no se pasa como argumento.
-        checkpoint_interval=60,  # seg
-    ):
-
-        self.duracion = duracion
-        self.step = step
-        self.ventana = ventana
-        self.canales = canales
-        self.eventos = []
-        self.flujo_eventos = flujo_eventos
-        self.blancos = blancos
-        self.detector_start = start
-        self.detector_stop = stop
-        self.coincidencias = np.array([0.0 for k in range(canales)])
-        self.clicks_start = []
-        self.clicks_stop = []
-        self.time = 0
-        self.folder = folder
-        self.checkpoint_interval = checkpoint_interval
-        self.polarizacion_fuente = polarizacion_fuente
-        print("Checkpoint interval: ", self.checkpoint_interval)
-
-    def __repr__(self):
-        return (
-            f"""
-        Start: {self.detector_start}
-        Stop: {self.detector_stop}
-        Blancos:
-        """
-            + "\n".join(f"\n{b}" for b in self.blancos)
-            + f"\nCoincidencias: {self.coincidencias}"
-        )
-
-    def draw_setup_2d(self, ax):
-        # Dibuja los detectores
-        legend = (
-            f"t={time_with_units(self.time)}\n"
-            f"flujo={self.flujo_eventos}\n"
-            f"cuentas={sum(self.coincidencias)}\n"
-        )
-        if self.clicks_start:
-            legend += (
-                f"start: {len(self.clicks_start)} cuentas"
-                f" entre  {self.clicks_start[-1]} y"
-                f" {self.clicks_start[0]}\n"
-            )
-        else:
-            legend += "nada en starts\n"
-        if self.clicks_stop:
-            legend += (
-                f"stop: {len(self.clicks_stop)} cuentas"
-                f" entre  {self.clicks_stop[-1]} y"
-                f" {self.clicks_stop[0]}\n"
-            )
-        else:
-            legend += "nada en stop"
-
-        ax.text(-15, 10, legend)
-        self.detector_start.draw_setup_2d(ax)
-        self.detector_stop.draw_setup_2d(ax)
-        # Dibuja los dispersores y shieldings
-        for blanco in self.blancos:
-            blanco.draw_setup_2d(ax)
-        # Dibuja los fotones
-        for evento in self.eventos:
-            evento.draw_setup_2d(ax)
-
-    def draw_setup_top(self, ax):
-        # Dibuja los detectores
-        legend = (
-            f"t={time_with_units(self.time)}\n"
-            f"flujo={self.flujo_eventos}\n"
-            f"cuentas={sum(self.coincidencias)}\n"
-        )
-        if self.clicks_start:
-            legend += (
-                f"start: {len(self.clicks_start)} cuentas"
-                f" entre  {self.clicks_start[-1]} y {self.clicks_start[0]}\n"
-            )
-        else:
-            legend += "nada en starts\n"
-        if self.clicks_stop:
-            legend += (
-                f"stop: {len(self.clicks_stop)} cuentas entre"
-                f"  {self.clicks_stop[-1]} y {self.clicks_stop[0]}\n"
-            )
-        else:
-            legend += "nada en stop"
-
-        ax.text(-15, 10, legend)
-        self.detector_start.draw_setup_top(ax)
-        self.detector_stop.draw_setup_top(ax)
-        # Dibuja los dispersores y shieldings
-        for blanco in self.blancos:
-            blanco.draw_setup_top(ax)
-        # Dibuja los fotones
-        for evento in self.eventos:
-            evento.draw_setup_top(ax)
-
-    def check_coincidencias(self):
-        """
-        Avanza el estado de las señales, acumula coincidencias,
-        y limpia los clicks perdidos.
-
-        Cuando uno de los detectores registra un evento, (en self.evol)
-        se genera una nueva entrada en la cola correspondiente (start o stop)
-        y se inicializa con (menos) el retardo correspondiente.
-        En cada paso, cada elemento de la cola se actualiza en un paso de valor
-        `self.step`. Eventualmente, estos valores se volverán
-        positivos, lo que representa una señal que efectivamente llegó a
-        la placa de coincidencias.
-
-        Si una señal de stop está "activa", y no hay una señal de "start"
-        previa, la señal se descarta.
-        Si la señal de "start" estuvo viva por un tiempo mayor a la ventana,
-        entonces se descarta.
-        Si a la vez están activas una señal de start y otra de stop, y la de
-        stop es posterior al start, se calcula la diferencia de tiempo.
-        Si es menor al tamaño de la ventana, se guarda, si no, se descarta.
-        """
-        # Avanza el estado de la señal y acumula coincidencias.
-        step = self.step
-        start_q = self.clicks_start
-        stop_q = self.clicks_stop
-        if start_q:
-            print_debug("    cola start", (start_q[0], start_q[-1]))
-        if stop_q:
-            print_debug("    cola stop", (stop_q[0], stop_q[-1]))
-
-        # La cola está vacía. Nada para hacer.
-        if not start_q and not stop_q:
-            return
-
-        for i, val in enumerate(start_q):
-            start_q[i] += step
-        for i, val in enumerate(stop_q):
-            stop_q[i] += step
-
-        # Remuevo los starts que se salieron de la ventana.
-        while start_q and start_q[0] > self.ventana:
-            old = start_q.pop(0)
-            print_debug(old, "ya no es un start valido")
-
-        # Remuevo los stops con tiempo positivo, que son más
-        # viejos que el start vigente.
-        if start_q:
-            while stop_q and stop_q[0] > 0 and start_q[0] < stop_q[0]:
-                old = stop_q.pop(0)
-                print_debug(
-                    old, "ya no es un stop valido, ya que ", start_q[0], "es más nuevo"
-                )
-        else:
-            # Si no hay nada en la cola de start,
-            # remover los stops con tiempos positivos
-            while stop_q and stop_q[0] > 0:
-                stop_q.pop(0)
-
-        if stop_q and start_q and stop_q[0] > 0:
-            # registramos un dt igual a la diferencia entre el stop y el start,
-            # mas un ruido gaussiano con un ancho de 0.1ns (de acuerdo con
-            # la incerteza estimada para la electrónica de coincidencias.
-            older_stop = stop_q.pop(0)
-            older_start = start_q.pop(0)
-            dt = older_start - older_stop  # + 0.1 * rng.normal()
-            canal = int(dt / self.ventana * self.canales)
-            # Registro la coincidencia.
-            try:
-                print_debug("Se ha formado una pareja!", [dt, canal])
-                self.coincidencias[canal] += 1.0
-            except IndexError:
-                print_debug("  demasiado tarde...")
-
-            # Remuevo los starts que son más viejos que el actual
-            # stop, ya que no podrían haberse detectado.
-            while start_q and start_q[0] > older_stop:
-                start_q.pop(0)
-
-        assert self.clicks_start is start_q
-        assert self.clicks_stop is stop_q
-
-    def check_point(self, folder=None, show_plots=False):
-        print(datetime.now().strftime("%H:%M:%S"))
-        if folder is None:
-            folder = self.folder
-
-        with open(f"{folder}/checkpoint.pkl", "wb") as f_out:
-            pickle.dump(self, f_out)
-
-        with open(f"{folder}/cuentas.txt", "w") as f_out:
-            f_out.write(str(self.time))
-            for c in self.coincidencias:
-                f_out.write("\n" + str(c))
-
-        print("cuentas:", sum(self.coincidencias))
-        for b in self.blancos:
-            print(b, " tuvo ", b.cuenta_compton, " eventos Compton y")
-            print("         ", b.cuenta_absorcion, " absorciones")
-
-        for name, d in [("start", self.detector_start), ("stop", self.detector_stop)]:
-            print(" El detector ", name, " tuvo ", d.num_arribos, " arribos y ")
-            print("         ", d.num_detecciones, " detecciones")
-            n_det = len(d.estadistica_deteccion)
-            if n_det:
-                tdet = sum(d.estadistica_deteccion) / n_det
-                disp_tdet = (
-                    sum([t**2 for t in d.estadistica_deteccion]) / n_det - tdet**2
-                ) ** 0.5
-                print("   tiempo medio entre detecciones:", tdet, "+/-", disp_tdet)
-
-        fig, ax = plt.subplots()
-        ax.set_xlim(-20, 20)
-        ax.set_ylim(-20, 20)
-        self.draw_setup_2d(ax)
-        plt.savefig(f"{folder}/setup.png")
-        if show_plots:
-            print("show!")
-            plt.show()
-        else:
-            plt.close()
-
-        print("draw top")
-        fig, ax = plt.subplots()
-        ax.set_xlim(-20, 20)
-        ax.set_ylim(-20, 20)
-        self.draw_setup_top(ax)
-        plt.savefig(f"{folder}/setuptop.png")
-        if show_plots:
-            print("show!")
-            plt.show()
-        else:
-            plt.close()
-
-        fig, ax = plt.subplots()
-        plt.plot(self.coincidencias)
-        plt.savefig(f"{folder}/coincidencias.png")
-        if show_plots:
-            print("show!")
-            plt.show()
-        else:
-            plt.close()
-
-    def evol(self):
-        """
-        realiza un paso de evolución
-        """
-        # Mueve todos los fotones
-        step = self.step
-
-        for evento in self.eventos:
-            evento.evol(step)
-        # Elimina todos los fotones que se escaparon
-        self.eventos = [ev for ev in self.eventos if ev.fotones]
-        # Actualiza la cola de coincidencias.
-        self.check_coincidencias()
-
-        # Simula la dispersión con los blancos
-        # Si se produce una dispersión, cambia el momento
-        # Si se produce absorción, aniquila al fotón.
-        for blanco in self.blancos:
-            blanco.check_scattering(step, self.eventos)
-
-        # Revisa el estado de los detectores, y registra los clicks.
-        # Detector.check_eventos devuelve un número en función de
-        # la energía absorbida. Podemos usar eso como criterio para
-        # filtrar (esto es, simular los discriminadores).
-        for detector_name, detector, clicks in [
-            ("start", self.detector_start, self.clicks_start),
-            ("stop", self.detector_stop, self.clicks_stop),
-        ]:
-
-            if detector.check_eventos(step, self.eventos):
-                clicks.append(-detector.retardo)
-                print_debug(detector_name, " hizo click!", self.time)
-                last_detec = detector.ultima_deteccion
-                if last_detec is not None:
-                    tiempo_entre_clicks = self.time - last_detec
-                    detector.estadistica_deteccion.append(tiempo_entre_clicks)
-                detector.ultima_deteccion = self.time
-
-    def simular(self, duracion=None):
-        if duracion is None:
-            duracion = self.duracion
-        step = self.step
-        print("simular  ", duracion, "ns")
-        print_debug("duracion:", duracion)
-        prob_emision = self.flujo_eventos * step
-        print_debug("probabilidad emision:", prob_emision)
-
-        time_print = time()
-        time_checkpoint = time()
-        while duracion > 0:
-            real_time = time()
-            if (real_time - time_print) > 5:
-                print(datetime.now().strftime("%H:%M:%S"))
-                print(
-                    self.time,
-                    "eventos:",
-                    len(self.eventos),
-                    "clicks start:",
-                    len(self.clicks_start),
-                    "clicks stop:",
-                    len(self.clicks_stop),
-                )
-                time_print = real_time
-
-            if (real_time - time_checkpoint) > self.checkpoint_interval:
-                print("Check point ")
-                self.check_point()
-                time_checkpoint = real_time
-
-            duracion -= step
-            self.time += step
-
-            if self.polarizacion_fuente:
-                parms_evento = {
-                    "singlete": False,
-                    "polarizado": self.polarizacion_fuente,
-                }
-            else:
-                parms_evento = {"singlete": True, "polarizado": None}
-
-            if prob_emision < 1:
-                if rng.uniform() < prob_emision:
-                    self.eventos.append(Evento(**parms_evento))
-            else:
-                for k in range(int(prob_emision)):
-                    self.eventos.append(Evento(**parms_evento))
-            self.evol()
+        # transverse annulus check using numeric axis
+        return bool(dentro_anillo(pos_arr, self.centro, self.radio_interno, self.radio_externo, self.eje))
