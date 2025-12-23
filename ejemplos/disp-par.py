@@ -1,7 +1,7 @@
 from os import mkdir
 from pathlib import Path
 from compton_simulator import sim
-from compton_simulator.sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico, Evento
+from compton_simulator.sim import Experimento, Detector, ShieldCilindrico, BlancoCilindrico
 
 
 from time import time
@@ -9,7 +9,7 @@ import numpy as np
 import pickle
 
 
-FLUJO = 1000
+FLUJO = 20
 # parametros
 sim.DEBUG = False
 # Descomentar esta línea par forzar a que la fuente sólo
@@ -19,13 +19,13 @@ sim.DEBUG = False
 # sim.HERALDO = False
 # sim.EMITIR_EN_PLANO = True
 
-DURACION = 1000 # 240000000
+DURACION = 10000 # 240000000
 RESET = True
 
 
 
 cilindro1 = BlancoCilindrico(
-    posicion=np.array([0, 0, 10.0]),
+    posicion=np.array([0, 0, 15.0]),
     alto=3,
     radio=2.54 / 2.0,
     lambda_absorcion=10000.0,  # Datos para el aluminio (https://en.wikipedia.org/wiki/Gamma_ray#/media/File:Al-gamma-xs.svg)
@@ -33,7 +33,7 @@ cilindro1 = BlancoCilindrico(
 )
 
 cilindro2 = BlancoCilindrico(
-    posicion=np.array([0, 0, -10.0]),
+    posicion=np.array([0, 0, -15.0]),
     alto=3,
     radio=2.54 / 2.0,
     lambda_absorcion=10000.0,
@@ -41,7 +41,7 @@ cilindro2 = BlancoCilindrico(
 )
 
 mesa = BlancoCilindrico(
-    posicion=np.array([0, 0, -19.0]),
+    posicion=np.array([0, 0, -25.0]),
     alto=10,
     radio=20,
     lambda_absorcion=10.0,
@@ -59,8 +59,8 @@ shield1 = ShieldCilindrico(
 )
 
 
-start = Detector(eficiencia=.9, posicion=np.array([12, 0, 10]), radio=2, retardo=0.5)
-stop = Detector(eficiencia=.7, posicion=np.array([0, 12, -10]), radio=2, retardo=20.)
+start = Detector(eficiencia_abs=1, eficiencia_compton=10.9, posicion=np.array([2, 0, 15]), radio=2, retardo=0.5)
+stop = Detector(eficiencia_abs=.1, eficiencia_compton=10.7, posicion=np.array([0, 2, -15]), radio=2, retardo=20.)
 
 blancos = [shield1, cilindro1, cilindro2, mesa]  # [shield1, cilindro1, cilindro2]
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     print(folder)
     try:
         mkdir(folder)
-    except:
+    except Exception:
         pass
 
     if not clean_start:
@@ -88,7 +88,7 @@ if __name__ == "__main__":
 
     if clean_start:
         exp = Experimento(
-            step=0.05,
+            step=0.005, # ns
             flujo_eventos=FLUJO,  # 3x10^-7 cuentas/ns en el experimento.
             start=start,
             stop=stop,
