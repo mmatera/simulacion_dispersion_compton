@@ -8,6 +8,7 @@ setup(
     install_requires=[
         'matplotlib',
         'numpy',
+        'numba',
     ],
     description=('Simulación de un experimento de'
                  'dispersión Compton en correlaciones'),

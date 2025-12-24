@@ -4,8 +4,12 @@ import numpy as np
 from numpy.random import default_rng
 from matplotlib import pyplot as plt
 import pickle
-
+from typing import List
 from numpy.linalg import norm
+
+import numba
+
+# numba.NUMBA_PARALLEL_DIAGNOSTICS=4
 
 PI = 3.1415926
 
@@ -19,6 +23,157 @@ RESET = True
 CONO_FUENTE = tuple((-0.99999999, 1))
 EMITIR_EN_PLANO = False
 HERALDO = True
+
+
+@numba.njit(fastmath=True,parallel=True)
+def fotones_fuera(positions, dist):
+    """
+    Determina los indices de los fotones que se escaparon
+    del experimento.
+    """
+    # dist_sq = dist*dist
+    # mask = np.empty(len(positions), np.bool_)
+    # for i in range(len(positions)):
+    #     x, y, z = positions[i]
+    #     mask[i] = (x*x+y*y+z*z)>dist_sq
+    distances = np.sum(positions**2, axis=1)
+    outside = distances > dist**2
+    return np.array([i for i, state in enumerate(outside) if state])
+
+@numba.njit(fastmath=True,parallel=True)
+def evol_photons(positions, momenta, energias, dt):
+    """
+    Actualiza las posiciones, evolucionando un tiempo dt
+    """
+    result = np.empty((len(positions), 3,), np.float64)
+    n = positions.shape[0]
+    for i in numba.prange(n):
+        pos = positions[i]
+        mom = momenta[i]
+        en = energias[i]
+        newpos = pos + dt * 29.9 * mom/ en
+        result[i] = newpos
+    return result
+    
+@numba.njit(fastmath=True,parallel=True)
+def dentro_detector(pos_foton, x_detector, r_detector):
+    n = pos_foton.shape[0]
+    count = 0
+    mask = np.empty(n, np.bool_)
+    r_sq = r_detector ** 2
+
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_detector[0]
+        dy = pos_foton[i, 1] - x_detector[1]
+        dz = pos_foton[i, 2] - x_detector[2]
+        
+        mask[i] = (dx**2+ dy**2 + dz**2<=r_sq)
+
+        
+    # Count the number of True outputs 
+    for i in range(n):
+        if mask[i]:
+            count +=1
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+    return out
+
+
+@numba.njit(fastmath=True, parallel=True)
+def dentro_cilindro(pos_foton, x_cil, r_cil, h_cil):
+    n = pos_foton.shape[0]
+    r2 = r_cil * r_cil
+    count = 0
+    half_h = 0.5 * h_cil
+
+    mask = np.empty(n, np.bool_)
+
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_cil[0]
+        dy = pos_foton[i, 1] - x_cil[1]
+        dz = pos_foton[i, 2] - x_cil[2]
+
+        if abs(dz) > half_h:
+            mask[i] = False
+            continue
+
+        if dx*dx + dy*dy > r2:
+            mask[i] = False
+            continue
+
+        mask[i] = True
+
+    # Convert mask → indices
+    for i in range(n):
+        if mask[i]:
+            count += 1
+
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+
+    return out
+
+
+
+@numba.njit(fastmath=True)
+def dentro_anillo(pos_foton, x_cil,
+                  r_int_cil, r_ext_cil,
+                  h_cil, eje):
+    """
+    Devuelve los índices de los puntos dentro de un anillo cilíndrico.
+    pos_foton debe tener forma (N,3).
+    """
+    n = pos_foton.shape[0]
+
+    half_h = 0.5 * h_cil
+    rad_in_sq = r_int_cil * r_int_cil
+    rad_ex_sq = r_ext_cil * r_ext_cil
+
+    mask = np.empty(n, np.bool_)
+    count = 0
+
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_cil[0]
+        dy = pos_foton[i, 1] - x_cil[1]
+        dz = pos_foton[i, 2] - x_cil[2]
+
+        # Reorientar ejes
+        if eje == 0:
+            dz, dy, dx = dx, dy, dz
+        elif eje == 1:
+            dx, dz, dy = dx, dy, dz
+        # eje == 2: no change
+
+        if abs(dz) > half_h:
+            mask[i] = False
+            continue
+
+        rsq = dx*dx + dy*dy
+        if rsq < rad_in_sq or rsq > rad_ex_sq:
+            mask[i] = False
+            continue
+
+        mask[i] = True
+        count += 1
+
+    # Convertir máscara → índices
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+
+    return out
+
 
 
 def time_with_units(t) -> str:
@@ -41,7 +196,7 @@ def prob_detection(eficiencia, n):
     """
     if eficiencia > 10.0:
         return 1.0
-    print_debug("Calculando la probabilidad de deteccion")
+    # print_debug("Calculando la probabilidad de deteccion")
 
     def eficiencia_media(p: float):
         """
@@ -89,13 +244,22 @@ def print_debug(*args):
 
 
 def KN_ThetaPhi(en=1):
+    """
+    Devuelve una orientación al azar,
+    con una distribución proporcional
+    a la sección eficaz diferencial de Klein Nishina.
+    """
     cos_theta = KN_CosTheta(en)
     theta = np.arccos(cos_theta)
     PI = np.pi
 
     def dof_phi(phi, en):
+        """
+        Densidad de probabilidad para phi, para una 
+        dada energía.
+        """
         la = 1 / (1 + en * (1 - cos_theta))
-        a = 1 - cos_theta**2
+        a = 1 - cos_theta**2 # Sin(theta)**2
         w = a / (la + 1.0 / la - a)
         return (1 + w * np.cos(2 * phi)) / (2.0 * PI)
 
@@ -114,7 +278,7 @@ def KN_ThetaPhi(en=1):
         dy = y0 - y1
         dx = dy / dof_phi(x0, en)
         if abs(dx) < 0.01:
-            print_debug(f"  convergence achieved in {20-rem_steps}")
+            # print_debug(f"  convergence achieved in {20-rem_steps}")
             break
         x1 = x0 + dx
         if x1 > PI:
@@ -162,7 +326,7 @@ def KN_CosTheta(en=1):
         dy = y0 - y1
         dx = dy / dof_costheta(x0, en)
         if abs(dx) < 0.01:
-            print_debug(f"  convergence achieved in {20-rem_steps}")
+            # print_debug(f"  convergence achieved in {20-rem_steps}")
             break
         x1 = x0 + dx
         if x1 > 1:
@@ -240,12 +404,12 @@ class Foton:
 
     def compton(self):
         self.historia.append(self.posicion)
-        print_debug("   Dispersion compton")
+        # print_debug("   Dispersion compton")
         p, pol = self.momento, self.polarizacion
         if pol is None:
             pol = "V" if rng.uniform() < 0.5 else "H"
 
-        print_debug("Polarizacion: ", pol)
+        # print_debug("Polarizacion: ", pol)
 
         def sortear(en):
             """
@@ -255,7 +419,7 @@ class Foton:
             return KN_ThetaPhi(en)
 
         def rotar(vector, eje, angulo):
-            assert abs(1 - norm(eje)) < 0.001
+            assert abs(1 - norm(eje)) < 0.001, f'eje={eje}\n{abs(1 - norm(eje))} >{0.001}'
             return (
                 np.dot(vector, eje) * eje
                 - np.cos(angulo) * np.cross(eje, np.cross(eje, vector))
@@ -310,20 +474,20 @@ class Foton:
         self.momento = p_out * energia
         self.energia = energia
         self.polarizacion = "V" if rng.uniform() < prob_V else "H"
-        print_debug("     listo", [self.momento, energia, self.polarizacion])
+        # print_debug("     listo", [self.momento, energia, self.polarizacion])
 
     def evol(self, t):
         """
         Evoluciona la posición del fotón (en cm) un tiempo t (en ns)
         """
-        if self.energia:
-            self.posicion = self.posicion + t * 29.9 * self.momento / self.energia
-        print_debug(self)
+        self.position = evol_photons(np.array([self.position]),
+                               np.array([self.momento]),
+                               np.array([self.energia]), t)[0]
+        # print_debug(self)
 
 
 class Evento:
     def __repr__(self):
-        1 / 0
         return (
             "..."
             + "\n".join(["\t" + foton.__repr__() for foton in self.fotones])
@@ -393,12 +557,19 @@ class Evento:
             foton.draw_setup_top(ax, color)
 
     def evol(self, t):
-        for foton in self.fotones:
-            foton.evol(t)
-        print_debug("---")
+        fotones_vivos = [foton for foton in self.fotones if (foton.energia and norm(foton.posicion) < 30.)]
+        posiciones = np.array([foton.posicion for foton in fotones_vivos], dtype=float, ndmin=2)
+        momenta = np.array([foton.momento for foton in fotones_vivos], dtype=float, ndmin=2)
+        energias = np.array([foton.energia for foton in fotones_vivos], ndmin=1)
+        
+        posiciones = evol_photons(posiciones, momenta, energias, t)                
+        for foton, new_pos in zip(fotones_vivos, posiciones):
+            foton.posicion = new_pos
+
+        # print_debug("---")
         # Me quedo sólo con los fotones que están
         # a menos de 30 centimetros de la fuente.
-        self.fotones = [foton for foton in self.fotones if norm(foton.posicion) < 30]
+        self.fotones = fotones_vivos
 
 
 class Detector:
@@ -408,7 +579,8 @@ class Detector:
 
     def __init__(
         self,
-        eficiencia: float,
+        eficiencia_abs: float,
+        eficiencia_compton: float,
         posicion: tuple,
         radio: float = 5,
         upper: float = 511,
@@ -422,7 +594,9 @@ class Detector:
         retardo: tiempo (en ns) de retardo entre la detección y
                  su registro.
         """
-        self.eficiencia = eficiencia
+        self.eficiencia_abs = eficiencia_abs
+        self.eficiencia_compton = eficiencia_compton
+        self.distribucion = np.zeros(200) # en 0.5 KeV
         self.posicion = np.array(posicion)
         self.radio = radio
         self.retardo = retardo
@@ -472,36 +646,53 @@ class Detector:
         # Si cambiamos dt desde la última vez,
         # recalculamos la probabilidad de
         # detección en función de la eficiencia.
-        if self._dt != dt:
-            p_deteccion = prob_detection(self.eficiencia, 2 * self.radio / (29.9 * dt))
-            print("p_deteccion:", p_deteccion)
-            self._p_deteccion = p_deteccion
-            self._dt = dt
-        else:
-            p_deteccion = self._p_deteccion
+        # if self._dt != dt:
+        #    p_deteccion = prob_detection(self.eficiencia, 2 * self.radio / (29.9 * dt))
+        #    print("p_deteccion:", p_deteccion)
+        #    self._p_deteccion = p_deteccion
+        #    self._dt = dt
+        # else:
+        #    p_deteccion = self._p_deteccion
 
-        for evento in eventos:
-            # Cada evento tiene tres fotones: primero el de 1200
-            # y luego el par de 511.
-            for foton in evento.fotones:
-                # Podríamos agregar también eficiencias
-                # en función de la energia
-                if self.adentro(foton.posicion):
-                    self.num_arribos += 1
-                    if rng.uniform() < p_deteccion:
-                        self.nivel += foton.energia
-                        # El fotón se "absorbe" sacándolo
-                        # del sistema.
-                        foton.aniquilar()
+        # Cada evento tiene tres fotones: primero el de 1200
+        # y luego el par de 511.    
+        fotones_activos = [foton  for evento in eventos for foton in evento.fotones if foton.energia]
+        posiciones = np.array([foton.posicion for foton in fotones_activos]).reshape(-1,3)
+        indices = dentro_detector(posiciones, self.posicion, self.radio)
+        uniform = rng.uniform
+        prob_abs = self.eficiencia_abs * dt
+        prob_compton = self.eficiencia_compton * dt
+
+
+        
+        for indice in indices:
+            foton = fotones_activos[indice]
+            self.num_arribos += 1
+            # Fotopico
+            if uniform() < prob_abs:
+                self.nivel += foton.energia
+                # El fotón se "absorbe" sacándolo
+                # del sistema.
+                foton.aniquilar()
+            # Compton
+            if uniform() < prob_compton:
+                # El foton sufre una dispersión
+                # en el material. 
+                energia_foton = foton.energia
+                if energia_foton>0:
+                    foton.compton()
+                    self.nivel += energia_foton- foton.energia
 
         if self.nivel > 0:
-            print_debug("nivel >0")
+            # print_debug("nivel >0")
             nivel = self.nivel
             self.nivel = 0.0
+            if nivel>40:
+                self.distribucion[int(nivel/20)] += 1
             # Esto simula el discriminador: si la energia es >511,
             # sólo acepta la señal con probabilidad (511/nivel)**2
             result = (self.upper / nivel) ** 2 > rng.uniform()
-            print_debug("Nivel del detector: ", nivel, "->", result)
+            # print_debug("Nivel del detector: ", nivel, "->", result)
             self.num_detecciones += 1
             return result
 
@@ -510,7 +701,7 @@ class Dispersor:
     """
     Representa las propiedades y el estado de un detector.
     """
-
+    
     def __init__(
         self, lambda_dispersion: float = 1.0, lambda_absorcion: float = 1000000.0
     ):
@@ -552,44 +743,52 @@ class Dispersor:
             if self.lambda_absorcion
             else 1.0
         )
-        for evento in eventos:
-            # Cada evento tiene tres fotones: primero el de 1200
-            # y luego el par de 511.
-            for foton in evento.fotones:
-                # Podríamos agregar también eficiencias
-                # en función de la energia
-                if not self.adentro(foton.posicion):
-                    continue
 
-                # Simula la absorción
-                if rng.uniform() < probabilidad_absorcion:
-                    # print_debug("                 absorcion!")
-                    foton.aniquilar()
-                    self.cuenta_absorcion += 1
+        fotones_in = [(evento, foton,) for evento in eventos for foton in evento.fotones if foton.energia]
 
-                elif rng.uniform() < probabilidad_dispersion:
-                    print_debug("                 dispersion!")
+        if isinstance(self, BlancoCilindrico):
+            posiciones = np.array([foton.posicion for evento, foton in fotones_in], dtype=float, ndmin=2)
+            fotones_in = [fotones_in[i] for i in
+                          dentro_cilindro(posiciones, self.posicion, self.radio, self.alto)]
+        elif isinstance(self, ShieldCilindrico):
+            posiciones = np.array([foton.posicion for evento, foton in fotones_in], dtype=float, ndmin=2)
+            fotones_in = [fotones_in[i] for i in
+                          dentro_anillo(posiciones, self.posicion, self.radio_interior, self.radio_exterior, self.alto, {"x":0,"y":1,"z":2}[self.eje])]
+        else:
+            fotones_in = [(evento, foton,) for evento, foton in fotones_in if self.adentro(foton)]
+        
+        for evento, foton in fotones_in:
+            # Simula la absorción
+            if rng.uniform() < probabilidad_absorcion:
+                # # print_debug("                 absorcion!")
+                foton.aniquilar()
+                self.cuenta_absorcion += 1
 
-                    if foton.singlete:
-                        print_debug("Estoy en un singlete!")
-                        # Como lo detectamos, definimos su
-                        # polarizacion, y la de su gemelo.
-                        foton.polarizacion = "V" if rng.choice(2, 1)[0] else "H"
-                        foton.singlete = False
-                        for candidato_gemelo in evento.fotones:
-                            if candidato_gemelo.singlete:
-                                candidato_gemelo.singlete = False
-                                candidato_gemelo.polarizacion = (
-                                    "H" if foton.polarizacion == "V" else "H"
-                                )
+            elif rng.uniform() < probabilidad_dispersion:
+                # print_debug("                 dispersion!")
+                
+                if foton.singlete:
+                    # print_debug("Estoy en un singlete!")
+                    # Como lo detectamos, definimos su
+                    # polarizacion, y la de su gemelo.
+                    foton.polarizacion = "V" if rng.choice(2, 1)[0] else "H"
+                    foton.singlete = False
+                    for candidato_gemelo in evento.fotones:
+                        if candidato_gemelo.singlete:
+                            candidato_gemelo.singlete = False
+                            candidato_gemelo.polarizacion = (
+                                "H" if foton.polarizacion == "V" else "H"
+                            )
 
-                    # Cambiamos la dirección con una distribución
-                    # de acuerdo a Klein-Nishina
-                    foton.compton()
-                    self.cuenta_compton += 1
+                # Cambiamos la dirección con una distribución
+                # de acuerdo a Klein-Nishina
+                foton.compton()
+                self.cuenta_compton += 1
 
 
 class BlancoCilindrico(Dispersor):
+
+    lista_adentro = dentro_cilindro
     def __init__(
         self,
         lambda_dispersion: float = 1.0,
@@ -773,13 +972,15 @@ class Experimento:
         polarizacion_fuente=None,  # Asumir que los fotones salen polarizados
         # Los detectores
         start: Detector = Detector(
-            eficiencia=0.9,
+            eficiencia_abs=0.3,
+            eficiencia_compton=.9,
             posicion=np.array([10, 0, 10]),
             radio=2,
             retardo=0,
         ),
         stop: Detector = Detector(
-            eficiencia=0.6,
+            eficiencia_abs=0.2,
+            eficiencia_compton=.3,
             posicion=np.array([-10, 0, -10]),
             radio=2,
             retardo=1,
@@ -913,7 +1114,7 @@ class Experimento:
         if start_q:
             print_debug("    cola start", (start_q[0], start_q[-1]))
         if stop_q:
-            print_debug("    cola stop", (stop_q[0], stop_q[-1]))
+           print_debug("    cola stop", (stop_q[0], stop_q[-1]))
 
         # La cola está vacía. Nada para hacer.
         if not start_q and not stop_q:
@@ -953,9 +1154,10 @@ class Experimento:
             canal = int(dt / self.ventana * self.canales)
             # Registro la coincidencia.
             try:
-                print_debug("Se ha formado una pareja!", [dt, canal])
+                print("Se ha formado una pareja!", [dt, canal])
                 self.coincidencias[canal] += 1.0
             except IndexError:
+                pass
                 print_debug("  demasiado tarde...")
 
             # Remuevo los starts que son más viejos que el actual
@@ -979,6 +1181,14 @@ class Experimento:
             for c in self.coincidencias:
                 f_out.write("\n" + str(c))
 
+        for nombre, detector in (("start", self.detector_start,),("stop", self.detector_stop),):
+            
+            with open(f"{folder}/espectro_{nombre}.txt", "w") as f_out:
+                f_out.write(nombre)
+                for c in detector.distribucion:
+                    f_out.write("\n" + str(c))
+
+                
         print("cuentas:", sum(self.coincidencias))
         for b in self.blancos:
             print(b, " tuvo ", b.cuenta_compton, " eventos Compton y")
@@ -999,7 +1209,7 @@ class Experimento:
         ax.set_xlim(-20, 20)
         ax.set_ylim(-20, 20)
         self.draw_setup_2d(ax)
-        plt.savefig(f"{folder}/setup.png")
+        plt.savefig(f"{folder}/setup.svg")
         if show_plots:
             print("show!")
             plt.show()
@@ -1011,7 +1221,7 @@ class Experimento:
         ax.set_xlim(-20, 20)
         ax.set_ylim(-20, 20)
         self.draw_setup_top(ax)
-        plt.savefig(f"{folder}/setuptop.png")
+        plt.savefig(f"{folder}/setuptop.svg")
         if show_plots:
             print("show!")
             plt.show()
@@ -1020,12 +1230,25 @@ class Experimento:
 
         fig, ax = plt.subplots()
         plt.plot(self.coincidencias)
-        plt.savefig(f"{folder}/coincidencias.png")
+        plt.savefig(f"{folder}/coincidencias.svg")
         if show_plots:
             print("show!")
             plt.show()
         else:
             plt.close()
+
+        # Registra la distribución de energías.
+        fig, ax = plt.subplots()
+        for nombre, detector in (("start", self.detector_start,),("stop", self.detector_stop),):
+            plt.plot( [20*i for i in range(len(detector.distribucion))]  ,  detector.distribucion,label=nombre)
+        plt.legend()
+        plt.savefig(f"{folder}/distribucion_energias.svg")
+        if show_plots:
+            print("show!")
+            plt.show()
+        else:
+            plt.close()
+            
 
     def evol(self):
         """
@@ -1034,10 +1257,26 @@ class Experimento:
         # Mueve todos los fotones
         step = self.step
 
-        for evento in self.eventos:
-            evento.evol(step)
-        # Elimina todos los fotones que se escaparon
+        fotones_vivos = [(ev, foton,) for ev in self.eventos  for foton in ev.fotones if foton.energia]
+        posiciones = np.array([foton.posicion for ev, foton in fotones_vivos])
+        momenta = np.array([foton.momento for ev, foton in fotones_vivos])
+        energias = np.array([foton.energia for ev, foton in fotones_vivos])
+        posiciones = evol_photons(posiciones, momenta, energias, step)
+
+        # actualizo las posiciones
+        for (ev, foton), new_pos in zip(fotones_vivos, posiciones):
+            foton.posicion = new_pos
+        
+        # Marco los fotones que se escaparon fijando su energía a 0. 
+        for idx in fotones_fuera(posiciones, 30):
+            fotones_vivos[idx][1].energia = 0.
+
+        # Luego, remuevo los fotones con energia 0 de los eventos
+        for ev in self.eventos:
+            ev.fotones = [foton for foton in ev.fotones if foton.energia]
+        # Finalmente, remuevo los eventos sin fotones.
         self.eventos = [ev for ev in self.eventos if ev.fotones]
+                              
         # Actualiza la cola de coincidencias.
         self.check_coincidencias()
 
@@ -1058,7 +1297,7 @@ class Experimento:
 
             if detector.check_eventos(step, self.eventos):
                 clicks.append(-detector.retardo)
-                print_debug(detector_name, " hizo click!", self.time)
+                # print_debug(detector_name, " hizo click!", self.time)
                 last_detec = detector.ultima_deteccion
                 if last_detec is not None:
                     tiempo_entre_clicks = self.time - last_detec
@@ -1070,9 +1309,9 @@ class Experimento:
             duracion = self.duracion
         step = self.step
         print("simular  ", duracion, "ns")
-        print_debug("duracion:", duracion)
+        # print_debug("duracion:", duracion)
         prob_emision = self.flujo_eventos * step
-        print_debug("probabilidad emision:", prob_emision)
+        # print_debug("probabilidad emision:", prob_emision)
 
         time_print = time()
         time_checkpoint = time()
@@ -1114,3 +1353,4 @@ class Experimento:
                 for k in range(int(prob_emision)):
                     self.eventos.append(Evento(**parms_evento))
             self.evol()
+

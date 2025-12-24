@@ -60,7 +60,7 @@ shield1 = ShieldCilindrico(
 
 
 start = Detector(eficiencia_abs=5, eficiencia_compton=3, posicion=np.array([2, 0, 15]), radio=2.5, retardo=10)
-stop = Detector(eficiencia_abs=0.1, eficiencia_compton=3, posicion=np.array([2, 0, -15]), radio=2.5, retardo=40.)
+stop = Detector(eficiencia_abs=0.1, eficiencia_compton=3, posicion=np.array([0, 2, -15]), radio=2.5, retardo=40.)
 
 blancos = [shield1, cilindro1, cilindro2, mesa]  # [shield1, cilindro1, cilindro2]
 # blancos = [mesa]  # [shield1, cilindro1, cilindro2]
