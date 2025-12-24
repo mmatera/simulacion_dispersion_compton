@@ -45,70 +45,134 @@ def evol_photons(positions, momenta, energias, dt):
     """
     Actualiza las posiciones, evolucionando un tiempo dt
     """
-    result = np.empty((len(positions), 3,), np.float64)    
-    for i, (pos, mom, en) in enumerate(zip(positions, momenta, energias)):
-        newpos = pos + dt*29.9 * mom/ en
+    result = np.empty((len(positions), 3,), np.float64)
+    n = positions.shape[0]
+    for i in numba.prange(n):
+        pos = positions[i]
+        mom = momenta[i]
+        en = energias[i]
+        newpos = pos + dt * 29.9 * mom/ en
         result[i] = newpos
     return result
     
 @numba.njit(fastmath=True,parallel=True)
 def dentro_detector(pos_foton, x_detector, r_detector):
-    rel_pos = (pos_foton - x_detector)
-    distances = np.sum(rel_pos**2, axis=1)
-    inside = distances < r_detector**2
-    return [i for i, state in enumerate(inside) if state]
-
-
-@numba.njit(fastmath=True,parallel=True)
-def dentro_cilindro(pos_foton, x_cil, r_cil, h_cil):
-    """
-    Dada una lista de puntos, determina los índices correspondientes
-    a puntos dentro de un cilindro centado en x_cil, de radio r_cil
-    y alto h_cil
-    """
-    rel_pos = (pos_foton - x_cil)
-    inside = np.abs(rel_pos[:, 2])<.5*h_cil
-    in_radius = np.sum(rel_pos[inside,:2]**2, axis=1)< r_cil**2
-    inside[inside] = np.logical_and(inside[inside], in_radius)
-    return [i for i, state in enumerate(inside) if state]
-
-
-@numba.njit(fastmath=True,parallel=True)
-def dentro_anillo(pos_foton, x_cil, r_int_cil:float, r_ext_cil:float, h_cil:float, eje:int)->List[int]:
-    """
-    Dada una lista de puntos, determina los índices correspondientes
-    a puntos dentro de un anillo cilíndrico centado en x_cil, de radio interior
-    r_in_cil, radio exterior r_ext_cil y alto h_cil.
-    """
-    half_h_cil=.5*h_cil
-    rad_in_sq = r_int_cil**2
-    rad_ex_sq = r_ext_cil**2
+    n = pos_foton.shape[0]
     count = 0
-    mask = np.empty(len(pos_foton), np.bool_)
-    
-    for i, pos in enumerate(pos_foton):
-        rel_pos = pos-x_cil
-        if eje==0:
-            dz, dy, dx = rel_pos
-        elif eje==1:
-            dx, dz, dy = rel_pos
-        else:
-            dx, dy, dz = rel_pos
+    mask = np.empty(n, np.bool_)
+    r_sq = r_detector ** 2
 
-        if abs(dz)> half_h_cil:
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_detector[0]
+        dy = pos_foton[i, 1] - x_detector[1]
+        dz = pos_foton[i, 2] - x_detector[2]
+        
+        mask[i] = (dx**2+ dy**2 + dz**2<=r_sq)
+
+        
+    # Count the number of True outputs 
+    for i in range(n):
+        if mask[i]:
+            count +=1
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+    return out
+
+
+@numba.njit(fastmath=True, parallel=True)
+def dentro_cilindro(pos_foton, x_cil, r_cil, h_cil):
+    n = pos_foton.shape[0]
+    r2 = r_cil * r_cil
+    count = 0
+    half_h = 0.5 * h_cil
+
+    mask = np.empty(n, np.bool_)
+
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_cil[0]
+        dy = pos_foton[i, 1] - x_cil[1]
+        dz = pos_foton[i, 2] - x_cil[2]
+
+        if abs(dz) > half_h:
             mask[i] = False
             continue
-        rsq = dx**2+dy**2 
-        if rsq > rad_ex_sq:
-            mask[i]=False
-            continue
-        if rsq < rad_in_sq:
-            mask[i]=False
-            continue
-        mask[i]=True
-        count+=1
 
-    return [i for i, val in enumerate(mask) if val]
+        if dx*dx + dy*dy > r2:
+            mask[i] = False
+            continue
+
+        mask[i] = True
+
+    # Convert mask → indices
+    for i in range(n):
+        if mask[i]:
+            count += 1
+
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+
+    return out
+
+
+
+@numba.njit(fastmath=True)
+def dentro_anillo(pos_foton, x_cil,
+                  r_int_cil, r_ext_cil,
+                  h_cil, eje):
+    """
+    Devuelve los índices de los puntos dentro de un anillo cilíndrico.
+    pos_foton debe tener forma (N,3).
+    """
+    n = pos_foton.shape[0]
+
+    half_h = 0.5 * h_cil
+    rad_in_sq = r_int_cil * r_int_cil
+    rad_ex_sq = r_ext_cil * r_ext_cil
+
+    mask = np.empty(n, np.bool_)
+    count = 0
+
+    for i in numba.prange(n):
+        dx = pos_foton[i, 0] - x_cil[0]
+        dy = pos_foton[i, 1] - x_cil[1]
+        dz = pos_foton[i, 2] - x_cil[2]
+
+        # Reorientar ejes
+        if eje == 0:
+            dz, dy, dx = dx, dy, dz
+        elif eje == 1:
+            dx, dz, dy = dx, dy, dz
+        # eje == 2: no change
+
+        if abs(dz) > half_h:
+            mask[i] = False
+            continue
+
+        rsq = dx*dx + dy*dy
+        if rsq < rad_in_sq or rsq > rad_ex_sq:
+            mask[i] = False
+            continue
+
+        mask[i] = True
+        count += 1
+
+    # Convertir máscara → índices
+    out = np.empty(count, np.int64)
+    j = 0
+    for i in range(n):
+        if mask[i]:
+            out[j] = i
+            j += 1
+
+    return out
 
 
 
@@ -494,9 +558,9 @@ class Evento:
 
     def evol(self, t):
         fotones_vivos = [foton for foton in self.fotones if (foton.energia and norm(foton.posicion) < 30.)]
-        posiciones = np.array([foton.posicion for foton in fotones_vivos])
-        momenta = np.array([foton.momento for foton in fotones_vivos])
-        energias = np.array([foton.energia for foton in fotones_vivos])
+        posiciones = np.array([foton.posicion for foton in fotones_vivos], dtype=float, ndmin=2)
+        momenta = np.array([foton.momento for foton in fotones_vivos], dtype=float, ndmin=2)
+        energias = np.array([foton.energia for foton in fotones_vivos], ndmin=1)
         
         posiciones = evol_photons(posiciones, momenta, energias, t)                
         for foton, new_pos in zip(fotones_vivos, posiciones):
@@ -532,7 +596,7 @@ class Detector:
         """
         self.eficiencia_abs = eficiencia_abs
         self.eficiencia_compton = eficiencia_compton
-        self.distribucion = np.zeros(100) # en 0.5 KeV
+        self.distribucion = np.zeros(200) # en 0.5 KeV
         self.posicion = np.array(posicion)
         self.radio = radio
         self.retardo = retardo
@@ -593,7 +657,7 @@ class Detector:
         # Cada evento tiene tres fotones: primero el de 1200
         # y luego el par de 511.    
         fotones_activos = [foton  for evento in eventos for foton in evento.fotones if foton.energia]
-        posiciones = np.array([foton.posicion for foton in fotones_activos])
+        posiciones = np.array([foton.posicion for foton in fotones_activos]).reshape(-1,3)
         indices = dentro_detector(posiciones, self.posicion, self.radio)
         uniform = rng.uniform
         prob_abs = self.eficiencia_abs * dt
@@ -623,7 +687,8 @@ class Detector:
             # print_debug("nivel >0")
             nivel = self.nivel
             self.nivel = 0.0
-            self.distribucion[int(nivel/20)] += 1
+            if nivel>40:
+                self.distribucion[int(nivel/20)] += 1
             # Esto simula el discriminador: si la energia es >511,
             # sólo acepta la señal con probabilidad (511/nivel)**2
             result = (self.upper / nivel) ** 2 > rng.uniform()
@@ -682,11 +747,11 @@ class Dispersor:
         fotones_in = [(evento, foton,) for evento in eventos for foton in evento.fotones if foton.energia]
 
         if isinstance(self, BlancoCilindrico):
-            posiciones = np.array([foton.posicion for evento, foton in fotones_in])
+            posiciones = np.array([foton.posicion for evento, foton in fotones_in], dtype=float, ndmin=2)
             fotones_in = [fotones_in[i] for i in
                           dentro_cilindro(posiciones, self.posicion, self.radio, self.alto)]
         elif isinstance(self, ShieldCilindrico):
-            posiciones = np.array([foton.posicion for evento, foton in fotones_in])
+            posiciones = np.array([foton.posicion for evento, foton in fotones_in], dtype=float, ndmin=2)
             fotones_in = [fotones_in[i] for i in
                           dentro_anillo(posiciones, self.posicion, self.radio_interior, self.radio_exterior, self.alto, {"x":0,"y":1,"z":2}[self.eje])]
         else:
@@ -1144,7 +1209,7 @@ class Experimento:
         ax.set_xlim(-20, 20)
         ax.set_ylim(-20, 20)
         self.draw_setup_2d(ax)
-        plt.savefig(f"{folder}/setup.png")
+        plt.savefig(f"{folder}/setup.svg")
         if show_plots:
             print("show!")
             plt.show()
@@ -1156,7 +1221,7 @@ class Experimento:
         ax.set_xlim(-20, 20)
         ax.set_ylim(-20, 20)
         self.draw_setup_top(ax)
-        plt.savefig(f"{folder}/setuptop.png")
+        plt.savefig(f"{folder}/setuptop.svg")
         if show_plots:
             print("show!")
             plt.show()
@@ -1165,7 +1230,7 @@ class Experimento:
 
         fig, ax = plt.subplots()
         plt.plot(self.coincidencias)
-        plt.savefig(f"{folder}/coincidencias.png")
+        plt.savefig(f"{folder}/coincidencias.svg")
         if show_plots:
             print("show!")
             plt.show()
@@ -1175,9 +1240,9 @@ class Experimento:
         # Registra la distribución de energías.
         fig, ax = plt.subplots()
         for nombre, detector in (("start", self.detector_start,),("stop", self.detector_stop),):
-            plt.plot(detector.distribucion,label=nombre)
+            plt.plot( [20*i for i in range(len(detector.distribucion))]  ,  detector.distribucion,label=nombre)
         plt.legend()
-        plt.savefig(f"{folder}/distribucion_energias.png")
+        plt.savefig(f"{folder}/distribucion_energias.svg")
         if show_plots:
             print("show!")
             plt.show()

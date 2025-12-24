@@ -9,7 +9,7 @@ import numpy as np
 import pickle
 
 
-FLUJO = .1
+FLUJO = 100
 # parametros
 sim.DEBUG = False
 # Descomentar esta línea par forzar a que la fuente sólo
@@ -59,11 +59,11 @@ shield1 = ShieldCilindrico(
 )
 
 
-start = Detector(eficiencia_abs=5, eficiencia_compton=3, posicion=np.array([2, 0, 15]), radio=2.5, retardo=10)
-stop = Detector(eficiencia_abs=0.1, eficiencia_compton=3, posicion=np.array([2, 0, -15]), radio=2.5, retardo=40.)
+start = Detector(eficiencia_abs=10, eficiencia_compton=0, posicion=np.array([2, 0, 15]), radio=2, retardo=0.5)
+stop = Detector(eficiencia_abs=0, eficiencia_compton=100, posicion=np.array([0, 2, -15]), radio=2, retardo=20.)
 
-blancos = [shield1, cilindro1, cilindro2, mesa]  # [shield1, cilindro1, cilindro2]
-# blancos = [mesa]  # [shield1, cilindro1, cilindro2]
+# blancos = [shield1, cilindro1, cilindro2, mesa]  # [shield1, cilindro1, cilindro2]
+blancos = [mesa]  # [shield1, cilindro1, cilindro2]
 
 
 if __name__ == "__main__":
